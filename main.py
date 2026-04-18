@@ -13,12 +13,11 @@ PROGRESS_FILE = "forwarder_progress.json"
 BATCH_SIZE = 100
 SLEEP_BETWEEN_BATCHES = 4
 
-# Initialize Client
 app = Client(
     "ForwarderSession",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    session_string=SESSION
+    api_id=36633307,
+    api_hash='a309e978fc781390093bdc509b289022',
+    session_string="BQIu-tsAxX0_UZOQWBlZoyzlDyEY4REo9DfUh1dRuL9-pC5wlCrYUx-UXtLfH4LfoBP0Q4aeEHF7Iyajvc9aiSp-6M-y0Di1XvhiipOhsYtegyp9wmICpqBHz53T2MQEhjswXJz8DW-DOR9pWAXJhPDztc7HVS4wnDe34AjLR8ZxrOU7FPx1nxmQGwiOiOxdWPVdU-Q8L5ga2POwBW5HAF8hZTPeGyuJ5qclyaKaugbSTRhHcPCEzPQmOKbz0kgezk2TQ4OTmBFxPVfGCK7zsaQcE_8Wm4E34CkGST1j07Y2N6kTpWgJ3RVjZj-q0DU_RDM2Nlt5meCrjBjh7VLKxUaKrb75OgAAAAHzTRFmAA"
 )
 
 def load_config():
