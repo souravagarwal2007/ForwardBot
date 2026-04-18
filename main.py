@@ -30,8 +30,8 @@ def load_config():
             return json.load(f)
     # Default configs
     return {
-        "SOURCE_CHANNELS": [-1002480896027],
-        "DESTINATION_CHANNEL": -1003816028004,
+        "SOURCE_CHANNELS": [-1002646022372],
+        "DESTINATION_CHANNEL": -1003933077267,
         "REALTIME_FORWARDING": True
     }
 
