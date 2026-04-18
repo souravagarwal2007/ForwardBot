@@ -2,28 +2,34 @@ import asyncio
 import os
 import json
 import logging
-from pyrogram import Client, errors
-from info import API_ID, API_HASH, SESSION
-
-# Configuration
-SOURCE_CHANNELS = [-1002480896027]  # Channels to forward FROM
-DESTINATION_CHANNEL = -1003816028004  # Channel to forward TO
-PROGRESS_FILE = "forwarder_progress.json"
-
-# Settings for performance and flood safety
-BATCH_SIZE = 100
-SLEEP_BETWEEN_BATCHES = 4  # Wait seconds between sending batches to avoid bans
+import re
+from pyrogram import Client, filters, errors
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Initialize the User Session
+CONFIG_FILE = "forwarder_config.json"
+PROGRESS_FILE = "forwarder_progress.json"
+BATCH_SIZE = 100
+SLEEP_BETWEEN_BATCHES = 4
+
+# Initialize Client
 app = Client(
     "ForwarderSession",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    session_string=SESSION,
-    no_updates=True  # We don't need update handling for a pure forwarder
+    api_id=36633307,
+    api_hash='a309e978fc781390093bdc509b289022',
+    session_string="BQIu-tsAxX0_UZOQWBlZoyzlDyEY4REo9DfUh1dRuL9-pC5wlCrYUx-UXtLfH4LfoBP0Q4aeEHF7Iyajvc9aiSp-6M-y0Di1XvhiipOhsYtegyp9wmICpqBHz53T2MQEhjswXJz8DW-DOR9pWAXJhPDztc7HVS4wnDe34AjLR8ZxrOU7FPx1nxmQGwiOiOxdWPVdU-Q8L5ga2POwBW5HAF8hZTPeGyuJ5qclyaKaugbSTRhHcPCEzPQmOKbz0kgezk2TQ4OTmBFxPVfGCK7zsaQcE_8Wm4E34CkGST1j07Y2N6kTpWgJ3RVjZj-q0DU_RDM2Nlt5meCrjBjh7VLKxUaKrb75OgAAAAHzTRFmAA"
 )
+
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    # Default configs if file doesn't exist yet
+    return {"SOURCE_CHANNELS": [-1002480896027], "DESTINATION_CHANNEL": -1003816028004}
+
+def save_config(config):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f)
 
 def load_progress():
     if os.path.exists(PROGRESS_FILE):
@@ -35,69 +41,170 @@ def save_progress(progress):
     with open(PROGRESS_FILE, "w") as f:
         json.dump(progress, f)
 
-async def get_latest_msg_id(chat_id):
-    """Fetches the highest message ID in the channel"""
-    async for msg in app.get_chat_history(chat_id, limit=1):
-        return msg.id
-    return 0
+config = load_config()
 
-async def main():
-    logging.info("Starting up forwarder session...")
-    await app.start()
-    progress = load_progress()
+# Helper to dynamically check if a chat is in source channels
+def is_source(_, __, message):
+    if not message.chat:
+        return False
+    return message.chat.id in config["SOURCE_CHANNELS"]
+
+source_filter = filters.create(is_source)
+
+
+# ---------------- INTERACTIVE COMMANDS ----------------
+
+@app.on_message(filters.me & filters.command("setdump", prefixes=["/", ".", "!"]))
+async def set_dump(client, message):
+    try:
+        chat_id = int(message.command[1])
+        config["DESTINATION_CHANNEL"] = chat_id
+        save_config(config)
+        await message.reply_text(f"✅ Dump channel set to `{chat_id}`")
+    except Exception:
+        await message.reply_text("Usage: `/setdump <chat_id>`\nExample: `/setdump -100123456789`")
+
+@app.on_message(filters.me & filters.command("addsource", prefixes=["/", ".", "!"]))
+async def add_source(client, message):
+    try:
+        chat_id = int(message.command[1])
+        if chat_id not in config["SOURCE_CHANNELS"]:
+            config["SOURCE_CHANNELS"].append(chat_id)
+            save_config(config)
+        await message.reply_text(f"✅ Added `{chat_id}` to source channels.")
+    except Exception:
+        await message.reply_text("Usage: `/addsource <chat_id>`")
+
+@app.on_message(filters.me & filters.command("rmsource", prefixes=["/", ".", "!"]))
+async def rm_source(client, message):
+    try:
+        chat_id = int(message.command[1])
+        if chat_id in config["SOURCE_CHANNELS"]:
+            config["SOURCE_CHANNELS"].remove(chat_id)
+            save_config(config)
+            await message.reply_text(f"✅ Removed `{chat_id}` from source channels.")
+        else:
+            await message.reply_text("❌ Channel not found in source list.")
+    except Exception:
+        await message.reply_text("Usage: `/rmsource <chat_id>`")
+
+@app.on_message(filters.me & filters.command("status", prefixes=["/", ".", "!"]))
+async def status_cmd(client, message):
+    text = f"**Forwarder Engine Status:**\n\n"
+    text += f"**Dump (Destination) Channel:** `{config.get('DESTINATION_CHANNEL', 'Not Set')}`\n\n"
+    text += f"**Source Channels (Listening Active):**\n"
+    sources = config.get("SOURCE_CHANNELS", [])
+    if not sources:
+        text += "- None\n"
+    for s in sources:
+        text += f"- `{s}`\n"
+        
+    await message.reply_text(text)
+
+@app.on_message(filters.me & filters.command("forwardfrom", prefixes=["/", ".", "!"]))
+async def forward_from(client, message):
+    if len(message.command) < 2:
+        return await message.reply_text("Usage: `/forwardfrom <telegram_message_link>`\nExample: `/forwardfrom https://t.me/c/-100.../50`")
+        
+    link = message.command[1]
     
-    for source in SOURCE_CHANNELS:
-        logging.info(f"Processing source channel: {source}")
+    # Regex to extract Chat ID and Message ID from the Telegram link
+    match = re.match(r"(https?://)?([tT]\.[mM][eE]/|telegram\.[mM][eE]/|telegram\.dog/)(c/)?([^/]+)/(\d+)", link)
+    if not match:
+        return await message.reply_text("❌ Invalid Telegram message link.")
         
-        last_forwarded_id = progress.get(str(source), 0)
-        latest_id = await get_latest_msg_id(source)
-        
-        if latest_id == 0:
-            logging.info(f"Could not get latest message id automatically, skipping channel {source}. (Make sure your session has joined this channel)")
-            continue
+    is_private = match.group(3) is not None
+    chat_username_or_id = match.group(4)
+    start_msg_id = int(match.group(5))
+    
+    if is_private and chat_username_or_id.isdigit():
+        chat_id = int("-100" + chat_username_or_id)
+    else:
+        try:
+            chat_id = int(chat_username_or_id)
+        except ValueError:
+            chat_id = chat_username_or_id # It's a public @username
 
-        logging.info(f"Target range: Message IDs from {last_forwarded_id} to {latest_id}")
-        
-        # We process purely by iterating sequential message IDs instead of fetching the entire history.
-        # This is extremely fast and Telegram purely ignores deleted/missing message IDs.
-        for start_id in range(last_forwarded_id + 1, latest_id + 1, BATCH_SIZE):
-            end_id = min(start_id + BATCH_SIZE - 1, latest_id)
+    if not config.get("DESTINATION_CHANNEL"):
+        return await message.reply_text("❌ No dump channel set! Use `/setdump` first.")
+
+    await message.reply_text(f"⏳ **Batch Forward Started!**\n\n- Source Chat: `{chat_id}`\n- Starting from message ID: `{start_msg_id}`\n\nI will continue running this in the background!")
+    
+    # Run the batch forward in the background so the script doesn't freeze and can still process real-time messages!
+    asyncio.create_task(run_batch_forward(chat_id, start_msg_id, message))
+
+
+# ---------------- BACKGROUND BATCH TASK ----------------
+
+async def run_batch_forward(source_chat, start_msg_id, reply_message):
+    try:
+        latest_id = 0
+        async for msg in app.get_chat_history(source_chat, limit=1):
+            latest_id = msg.id
+            break
             
-            # Create a list of 100 continuous message IDs
+        if latest_id == 0:
+            return await reply_message.reply_text(f"❌ Failed to get latest message from `{source_chat}`. Either it's empty or I lack access.")
+
+        progress = load_progress()
+        dest_channel = config["DESTINATION_CHANNEL"]
+        
+        logging.info(f"Batch Task: Target range {start_msg_id} -> {latest_id}")
+        
+        for start_id in range(start_msg_id, latest_id + 1, BATCH_SIZE):
+            end_id = min(start_id + BATCH_SIZE - 1, latest_id)
             msg_ids = list(range(start_id, end_id + 1))
             
-            await forward_batch(source, msg_ids)
+            while True:
+                try:
+                    logging.info(f"Batch Task: Forwarding messages {msg_ids[0]} to {msg_ids[-1]}...")
+                    await app.forward_messages(
+                        chat_id=dest_channel,
+                        from_chat_id=source_chat,
+                        message_ids=msg_ids,
+                        drop_author=True  # Hides forwarded-from tag
+                    )
+                    break 
+                except errors.FloodWait as e:
+                    wait_time = e.value + 5
+                    logging.warning(f"Batch Task: FloodWait hit! Sleeping for {wait_time} seconds.")
+                    await asyncio.sleep(wait_time)
+                except Exception as e:
+                    logging.error(f"Batch Task: Failed to forward chunk. Ignoring and proceeding past it... {e}")
+                    break
             
-            # Save our exact place
-            progress[str(source)] = end_id
+            progress[f"{source_chat}_manual"] = end_id
             save_progress(progress)
-            
-            # Crucial wait to avoid API limitations/spamming
             await asyncio.sleep(SLEEP_BETWEEN_BATCHES)
-            
-    await app.stop()
-    logging.info("Forwarding process fully wrapped up!")
 
-async def forward_batch(source, msg_ids):
-    while True:
-        try:
-            logging.info(f"Forwarding messages {msg_ids[0]} to {msg_ids[-1]}...")
-            await app.forward_messages(
-                chat_id=DESTINATION_CHANNEL,
-                from_chat_id=source,
-                message_ids=msg_ids,
-                drop_author=True  # Completely hides the "Forwarded from" tag
-            )
-            break
-        except errors.FloodWait as e:
-            # e.value is strictly the wait duration in Pyrogram V2
-            wait_time = e.value + 5
-            logging.warning(f"FloodWait hit! Telegram tells us to wait. Sleeping for {wait_time} seconds (Don't close the script).")
-            await asyncio.sleep(wait_time)
-        except Exception as e:
-            # If an obscure error occurs, we ignore instead of crashing the whole 1-million loop
-            logging.error(f"Failed to forward a batch (ignoring and proceeding past it): {e}")
-            break
+        await reply_message.reply_text(f"✅ **Batch Forward Complete!**\nCaught up to the latest message (`{latest_id}`) in chat `{source_chat}`.")
+        
+    except Exception as e:
+        await reply_message.reply_text(f"❌ Error during batch forward process: `{e}`")
+
+
+# ---------------- REAL-TIME ACTIVE LISTENER ----------------
+
+@app.on_message(source_filter & ~filters.me)
+async def realtime_listener(client, message):
+    dest = config.get("DESTINATION_CHANNEL")
+    if not dest:
+        return
+        
+    try:
+        # Directly copying/forwarding the incoming new message
+        await message.forward(
+            chat_id=dest,
+            drop_author=True  # Ensures no 'Forwarded from' tag on real-time uploads
+        )
+        logging.info(f"Real-time: Forwarded new incoming upload (ID: {message.id}) from {message.chat.id}")
+    except errors.FloodWait as e:
+        await asyncio.sleep(e.value + 2)
+        await message.forward(chat_id=dest, drop_author=True)
+    except Exception as e:
+        logging.error(f"Real-time forward failed: {e}")
+
 
 if __name__ == "__main__":
-    app.run(main())
+    logging.info("Starting Fully Interactive Forwarder Userbot...")
+    app.run()
