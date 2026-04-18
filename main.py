@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 CONFIG_FILE = "forwarder_config.json"
 PROGRESS_FILE = "forwarder_progress.json"
 BATCH_SIZE = 100
-SLEEP_BETWEEN_BATCHES = 4
+SLEEP_BETWEEN_BATCHES = 15
 
 app = Client(
     "ForwarderSession",
